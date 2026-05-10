@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LYNIS // CYBER DASHBOARD</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── Header ── -->
+  <header id="header" class="pixel-box">
+    <div>
+      <span style="font-size:26px;">▓▓</span>
+      &nbsp;LYNIS :: CYBER-HARDENED DASHBOARD
+      &nbsp;<span class="blink" style="font-size:14px;">█</span>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <span id="badge-warn"  class="badge warn">WARN: 0</span>
+      <span id="badge-sugg"  class="badge">SUGG: 0</span>
+      <span id="badge-tests" class="badge">TESTS: —</span>
+    </div>
+  </header>
+
+  <!-- ── Sphere Canvas ── -->
+  <div id="canvas-wrap">
+    <div id="crater-count">CRATERS: 0</div>
+    <div id="harden-idx">
+      <span>HARDENING INDEX</span>
+      <span id="hi-val">—</span>
+    </div>
+  </div>
+
+  <!-- ── Side Panel ── -->
+  <aside id="panel">
+    <div id="panel-header" class="pixel-box">
+      ▒ LIVE FEED
+    </div>
+    <div class="px-divider"></div>
+
+    <div id="feed"></div>
+
+    <div class="px-divider"></div>
+    <div id="stats-bar">
+      <div class="row">
+        <span>WARNINGS</span>
+        <span class="val" id="stat-warn">0</span>
+      </div>
+      <div class="row">
+        <span>SUGGESTIONS</span>
+        <span class="val" id="stat-sugg">0</span>
+      </div>
+      <div class="row">
+        <span>TESTS RUN</span>
+        <span class="val" id="stat-tests">0</span>
+      </div>
+      <div class="row">
+        <span>STATUS</span>
+        <span class="val" id="stat-status" style="font-size:12px;letter-spacing:1px;">WAITING</span>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const feed      = document.getElementById("feed");
+  const badgeWarn = document.getElementById("badge-warn");
+  const badgeSugg = document.getElementById("badge-sugg");
+  const badgeTests= document.getElementById("badge-tests");
+  const statWarn  = document.getElementById("stat-warn");
+  const statSugg  = document.getElementById("stat-sugg");
+  const statTests = document.getElementById("stat-tests");
+  const statStatus= document.getElementById("stat-status");
+  const hiVal     = document.getElementById("hi-val");
+
+  let warnCount = 0, suggCount = 0, testsCount = 0;
+
+  function addFeedItem(text, type) {
+    const el = document.createElement("div");
+    el.className = `feed-item ${type}`;
+
+    const prefix = type === "warning"    ? "[WARN] "
+                 : type === "suggestion" ? "[SUGG] "
+                 : "[SYS]  ";
+
+    el.textContent = prefix + text;
+    feed.appendChild(el);
+
+    // Keep last 200 items
+    while (feed.children.length > 200) {
+      feed.removeChild(feed.firstChild);
+    }
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  // ── Socket.IO ──
+  const socket = io();
+
+  socket.on("connect", () => {
+    statStatus.textContent = "LINKED";
+    addFeedItem("WebSocket link established.", "status");
+  });
+
+  socket.on("disconnect", () => {
+    statStatus.textContent = "OFFLINE";
+    addFeedItem("Connection lost. Retrying…", "status");
+  });
+
+  socket.on("status", (d) => {
+    addFeedItem(d.msg, "status");
+    statStatus.textContent = "PARSING";
+  });
+
+  socket.on("error", (d) => {
+    addFeedItem("ERROR: " + d.msg, "status");
+    statStatus.textContent = "ERROR";
+  });
+
+  socket.on("warning", (d) => {
+    warnCount++;
+    badgeWarn.textContent = `WARN: ${warnCount}`;
+    statWarn.textContent  = warnCount;
+    addFeedItem(d.text, "warning");
+
+    if (typeof window.applyWarningCrater === "function") {
+      window.applyWarningCrater();
+    }
+    if (typeof window.triggerSpinBurst === "function") {
+      window.triggerSpinBurst();
+    }
+  });
+
+  socket.on("suggestion", (d) => {
+    suggCount++;
+    badgeSugg.textContent = `SUGG: ${suggCount}`;
+    statSugg.textContent  = suggCount;
+    addFeedItem(d.text, "suggestion");
+  });
+
+  socket.on("hardening_index", (d) => {
+    hiVal.textContent = d.value;
+  });
+
+  socket.on("tests_performed", (d) => {
+    testsCount = d.value;
+    badgeTests.textContent    = `TESTS: ${testsCount}`;
+    statTests.textContent     = testsCount;
+  });
+})();
+</script>
+
+<!-- Three.js visualizer loaded after DOM is ready -->
+<script src="/visualizer.js"></script>
+
+</body>
+</html>
