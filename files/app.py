@@ -3,50 +3,234 @@ import re
 import time
 import threading
 import subprocess
-from flask import Flask, render_template
+import csv as csv_mod
+import io
+from flask import Flask, Response
 from flask_socketio import SocketIO
 
-app = Flask(__name__, template_folder=".", static_url_path="", static_folder=".")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(__name__, template_folder=BASE_DIR, static_url_path="", static_folder=BASE_DIR)
 app.config["SECRET_KEY"] = "lynis-brutalist-0xDEAD"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 LYNIS_REPORT = "/var/log/lynis-report.dat"
-LYNIS_LOG    = "/var/log/lynis.log"
 
-audit_history = []
-audit_log = []   # flat list for sync, mirrors audit_history
-last_audit_summary = {"warnings": 0, "suggestions": 0}
-current_audit_summary = {"warnings": 0, "suggestions": 0}
-WARN_RE = re.compile(r"^warning\[]=(.+)$")
-SUGG_RE = re.compile(r"^suggestion\[]=(.+)$")
-HRDN_RE = re.compile(r"^hardening_index=(\d+)$")
-TEST_RE = re.compile(r"^tests_performed=(\d+)$")
+# ── Session state ──────────────────────────────────────────
+audit_log       = []
+_seen           = set()
+last_summary    = {"warnings": 0, "suggestions": 0}
+current_summary = {"warnings": 0, "suggestions": 0}
+audit_lock      = threading.Lock()
 
-def _readable_path(path):
-    """Return a sudoable tail command if the file needs elevated read."""
-    if os.access(path, os.R_OK):
-        return ["tail", "-F", "-n", "+1", path]
-    return ["sudo", "tail", "-F", "-n", "+1", path]
+# ── .dat regex ─────────────────────────────────────────────
+RE_WARN    = re.compile(r"^warning\[]=([^|]+)\|?([^|]*)\|?([^|]*)\|?(.*)$")
+RE_SUGG    = re.compile(r"^suggestion\[]=([^|]+)\|?([^|]*)\|?(.*)$")
+RE_HARDEN  = re.compile(r"^hardening_index=(\d+)$")
+RE_TESTS   = re.compile(r"^tests_performed=(\d+)$")
+RE_VULN    = re.compile(r"^vulnerable_package\[]=(.+)$")
+RE_UNSAFE  = re.compile(r"^(?:systemd_service_unsafe|unsafe_service)\[]=(.+)$")
+RE_EXPOSE  = re.compile(r"^(?:systemd_service_exposed|exposed_service)\[]=(.+)$")
+RE_FIREWALL= re.compile(r"^firewall_active=(.+)$")
+RE_MALWARE = re.compile(r"^malware_scanner=(.+)$")
+RE_OS      = re.compile(r"^os=(.+)$")
+RE_OS_VER  = re.compile(r"^os_version=(.+)$")
+RE_KERNEL  = re.compile(r"^os_kernel_version_full=(.+)$")
+RE_HOST    = re.compile(r"^hostname=(.+)$")
 
-def lynis_line_generator(path):
-    cmd = _readable_path(path)
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-    )
-    try:
-        for line in iter(proc.stdout.readline, ""):
-            yield line.rstrip()
-    finally:
-        proc.terminate()
+# ── stdout regex ───────────────────────────────────────────
+RE_STDOUT_WARN    = re.compile(r"\[WARNING\]:\s*(.+)", re.IGNORECASE)
+RE_STDOUT_SECTION = re.compile(r"^\[\+\]\s+(.+)$")
+RE_STDOUT_CHECK   = re.compile(r"-\s+(.+?)\s{2,}\[\s*([A-Z][A-Z\s/]+?)\s*\]")
+
+STDOUT_SEVERITY = {
+    "WARNING":            "warning",
+    "DISABLED":           "status_disabled",
+    "NOT ENCRYPTED":      "status_disabled",
+    "NOT INSTALLED":      "status_missing",
+    "NONE":               "status_disabled",
+    "UNSAFE":             "unsafe_service",
+    "EXPOSED":            "exposed_service",
+    "MEDIUM":             "status_medium",
+    "PROTECTED":          "status_ok",
+    "HARDENED":           "status_ok",
+    "PARTIALLY HARDENED": "status_medium",
+    "OK":                 "status_ok",
+    "DONE":               "status_ok",
+    "FOUND":              "status_ok",
+    "ENABLED":            "status_ok",
+    "INSTALLED":          "status_ok",
+    "ACTIVE":             "status_ok",
+    "NO UPDATE":          "status_ok",
+    "NOT FOUND":          "status_missing",
+    "WEAK":               "warning",
+    "DIFFERENT":          "status_medium",
+    "UNKNOWN":            "status_info",
+    "DEFAULT":            "status_info",
+    "SKIPPED":            "status_info",
+}
+
+
+def _emit(key, evt, event_name, payload):
+    if key in _seen:
+        return
+    _seen.add(key)
+    audit_log.append(evt)
+    socketio.emit(event_name, payload)
+
+
+def parse_dat_line(line):
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return
+
+    m = RE_WARN.match(line)
+    if m:
+        test_id = m.group(1).strip()
+        details = (m.group(3) or m.group(2) or "").strip()
+        text    = f"[{test_id}] {details}" if details else test_id
+        current_summary["warnings"] += 1
+        delta = current_summary["warnings"] - last_summary["warnings"]
+        _emit(f"dw:{line}", {"type": "warning", "text": text, "test_id": test_id},
+              "warning", {"text": text, "delta": delta})
+        return
+
+    m = RE_SUGG.match(line)
+    if m:
+        test_id = m.group(1).strip()
+        details = m.group(2).strip() or ""
+        text    = f"[{test_id}] {details}" if details else test_id
+        current_summary["suggestions"] += 1
+        delta = current_summary["suggestions"] - last_summary["suggestions"]
+        _emit(f"ds:{line}", {"type": "suggestion", "text": text, "test_id": test_id},
+              "suggestion", {"text": text, "delta": delta})
+        return
+
+    m = RE_VULN.match(line)
+    if m:
+        text = f"Vulnerable package: {m.group(1).strip()}"
+        _emit(f"dv:{line}", {"type": "vulnerability", "text": text},
+              "vulnerability", {"text": text})
+        return
+
+    m = RE_UNSAFE.match(line)
+    if m:
+        text = f"Unsafe service: {m.group(1).strip()}"
+        _emit(f"du:{line}", {"type": "unsafe_service", "text": text},
+              "unsafe_service", {"text": text})
+        return
+
+    m = RE_EXPOSE.match(line)
+    if m:
+        text = f"Exposed service: {m.group(1).strip()}"
+        _emit(f"de:{line}", {"type": "exposed_service", "text": text},
+              "exposed_service", {"text": text})
+        return
+
+    m = RE_HARDEN.match(line)
+    if m:
+        val = int(m.group(1))
+        key = f"dhi:{val}"
+        if key not in _seen:
+            _seen.add(key)
+            audit_log.append({"type": "hardening_index", "value": val})
+        socketio.emit("hardening_index", {"value": val})
+        return
+
+    m = RE_TESTS.match(line)
+    if m:
+        val = int(m.group(1))
+        key = f"dtp:{val}"
+        if key not in _seen:
+            _seen.add(key)
+            audit_log.append({"type": "tests_performed", "value": val})
+        socketio.emit("tests_performed", {"value": val})
+        return
+
+    m = RE_FIREWALL.match(line)
+    if m:
+        _emit(f"dfw:{line}", {"type": "info", "text": f"Firewall active: {m.group(1).strip()}",
+                              "category": "firewall"},
+              "info_event", {"text": f"Firewall: {m.group(1).strip()}", "category": "firewall"})
+        return
+
+    m = RE_MALWARE.match(line)
+    if m:
+        _emit(f"dml:{line}", {"type": "info", "text": f"Malware scanner: {m.group(1).strip()}",
+                              "category": "malware"},
+              "info_event", {"text": f"Malware scanner: {m.group(1).strip()}", "category": "malware"})
+        return
+
+    m = RE_OS.match(line)
+    if m:
+        socketio.emit("system_info", {"key": "os", "value": m.group(1).strip()})
+        return
+    m = RE_OS_VER.match(line)
+    if m:
+        socketio.emit("system_info", {"key": "os_version", "value": m.group(1).strip()})
+        return
+    m = RE_KERNEL.match(line)
+    if m:
+        socketio.emit("system_info", {"key": "kernel", "value": m.group(1).strip()})
+        return
+    m = RE_HOST.match(line)
+    if m:
+        socketio.emit("system_info", {"key": "hostname", "value": m.group(1).strip()})
+        return
+
+
+def parse_stdout_line(line):
+    stripped = line.strip()
+    if not stripped:
+        return
+
+    m = RE_STDOUT_WARN.search(stripped)
+    if m:
+        text = m.group(1).strip()
+        current_summary["warnings"] += 1
+        delta = current_summary["warnings"] - last_summary["warnings"]
+        _emit(f"sw:{text}", {"type": "warning", "text": f"[WARN] {text}"},
+              "warning", {"text": f"[WARN] {text}", "delta": delta})
+        return
+
+    m = RE_STDOUT_SECTION.match(stripped)
+    if m:
+        socketio.emit("audit_section", {"section": m.group(1).strip()})
+        return
+
+    m = RE_STDOUT_CHECK.search(stripped)
+    if m:
+        label  = m.group(1).strip().rstrip("-").strip()
+        status = m.group(2).strip().upper()
+        category = STDOUT_SEVERITY.get(status, "status_info")
+        text   = f"{label}: {status}"
+        key    = f"sc:{text}"
+
+        if category == "warning":
+            current_summary["warnings"] += 1
+            delta = current_summary["warnings"] - last_summary["warnings"]
+            _emit(key, {"type": "warning", "text": text},
+                  "warning", {"text": text, "delta": delta})
+        elif category == "unsafe_service":
+            _emit(key, {"type": "unsafe_service", "text": text},
+                  "unsafe_service", {"text": text})
+        elif category == "exposed_service":
+            _emit(key, {"type": "exposed_service", "text": text},
+                  "exposed_service", {"text": text})
+        elif category in ("status_disabled", "status_missing"):
+            _emit(key, {"type": "status_disabled", "text": text},
+                  "status_disabled", {"text": text})
+        elif category == "status_medium":
+            _emit(key, {"type": "status_medium", "text": text},
+                  "status_medium", {"text": text})
+        else:
+            _emit(key, {"type": "status_ok", "text": text, "status": status},
+                  "status_check", {"text": text, "status": status, "category": category})
+
 
 def parse_and_emit(wait=True):
-    """Background thread: tail Lynis report and emit events over WebSocket."""
     if wait:
-        for _ in range(30):
+        for _ in range(60):
             if os.path.exists(LYNIS_REPORT):
                 break
             time.sleep(1)
@@ -55,47 +239,22 @@ def parse_and_emit(wait=True):
         socketio.emit("error", {"msg": f"Report not found: {LYNIS_REPORT}"})
         return
 
-    if not os.path.exists(LYNIS_REPORT):
-        socketio.emit("error", {"msg": f"Report not found: {LYNIS_REPORT}"})
-        return
+    try:
+        cmd = (["cat", LYNIS_REPORT] if os.access(LYNIS_REPORT, os.R_OK)
+               else ["sudo", "cat", LYNIS_REPORT])
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, bufsize=1)
+        for line in iter(proc.stdout.readline, ""):
+            parse_dat_line(line.rstrip())
+        proc.wait()
+    except Exception as ex:
+        socketio.emit("error", {"msg": f"DAT parse error: {ex}"})
 
-    for line in lynis_line_generator(LYNIS_REPORT):
-        wm = WARN_RE.match(line)
-        if wm:
-            current_audit_summary["warnings"] += 1
-            evt = {"type": "warning", "text": wm.group(1)}
-            audit_history.append(evt)
-            audit_log.append(evt)
-            socketio.emit("warning", {
-                "text": wm.group(1),
-                "delta": current_audit_summary["warnings"] - last_audit_summary["warnings"]
-            })
-            continue
 
-        sm = SUGG_RE.match(line)
-        if sm:
-            current_audit_summary["suggestions"] += 1
-            evt = {"type": "suggestion", "text": sm.group(1)}
-            audit_history.append(evt)
-            audit_log.append(evt)
-            socketio.emit("suggestion", {
-                "text": sm.group(1),
-                "delta": current_audit_summary["suggestions"] - last_audit_summary["suggestions"]
-            })
-            continue
-
-        hm = HRDN_RE.match(line)
-        if hm:
-            evt = {"type": "hardening_index", "value": int(hm.group(1))}
-            audit_history.append(evt)
-            socketio.emit("hardening_index", {"value": int(hm.group(1))})
-            continue
-
-        tm = TEST_RE.match(line)
-        if tm:
-            evt = {"type": "tests_performed", "value": int(tm.group(1))}
-            audit_history.append(evt)
-            socketio.emit("tests_performed", {"value": int(tm.group(1))})
+# ── Routes ─────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read()
 
 @app.route("/favicon.ico")
 def fav():
@@ -103,78 +262,75 @@ def fav():
 
 @app.route("/api/export")
 def export_csv():
-    import io, csv as csv_mod
-    from flask import Response
     buf = io.StringIO()
     writer = csv_mod.writer(buf)
-    writer.writerow(["type", "text"])
+    writer.writerow(["type", "text", "test_id"])
     for evt in audit_log:
-        if evt.get("type") in ("warning", "suggestion"):
-            writer.writerow([evt["type"], evt.get("text", "")])
+        if evt.get("type") in ("warning", "suggestion", "vulnerability",
+                               "unsafe_service", "exposed_service", "status_disabled"):
+            writer.writerow([evt.get("type", ""), evt.get("text", ""), evt.get("test_id", "")])
     buf.seek(0)
-    return Response(
-        buf.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=lynis_audit.csv"}
-    )
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=lynis_audit.csv"})
 
-@app.route("/")
-def index():
-    return open("index.html").read()
 
+# ── Socket handlers ────────────────────────────────────────
 @socketio.on("connect")
 def on_connect():
-    socketio.emit("status", {"msg": "LINK ESTABLISHED — PARSING LYNIS REPORT"})
-
-@socketio.on("request_history")
-def handle_request_history():
-    socketio.emit("history_dump", {"events": audit_history})
+    socketio.emit("status", {"msg": "LINK ESTABLISHED"})
 
 @socketio.on("sync")
 def handle_sync():
     socketio.emit("sync_dump", {"events": audit_log})
 
-audit_lock = threading.Lock()
+@socketio.on("request_history")
+def handle_history():
+    socketio.emit("history_dump", {"events": audit_log})
 
 @socketio.on("start_audit")
 def handle_start_audit():
     def run():
+        global audit_log, _seen, current_summary
+
         if not audit_lock.acquire(blocking=False):
             socketio.emit("audit_status", {"state": "busy", "msg": "AUDIT ALREADY RUNNING"})
             return
         try:
-            socketio.emit("audit_status", {"state": "running", "msg": "INITIALIZING LYNIS..."})
+            audit_log = []
+            _seen = set()
+            current_summary["warnings"]    = 0
+            current_summary["suggestions"] = 0
+            socketio.emit("session_reset", {})
+            socketio.emit("audit_status", {"state": "running", "msg": "STARTING LYNIS AUDIT..."})
+
             proc = subprocess.Popen(
                 ["sudo", "lynis", "audit", "system", "--no-colors"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
             )
             for line in iter(proc.stdout.readline, ""):
-                line = line.strip()
+                line = line.rstrip()
                 if line:
                     socketio.emit("audit_progress", {"line": line})
+                    parse_stdout_line(line)
             proc.wait()
-            socketio.emit("audit_status", {"state": "done", "msg": "AUDIT COMPLETE — PARSING REPORT"})
-            # Re-trigger report parsing after audit finishes
-            threading.Thread(target=parse_and_emit, daemon=True).start()
-        except Exception as e:
-            socketio.emit("audit_status", {"state": "error", "msg": str(e)})
+
+            last_summary["warnings"]    = current_summary["warnings"]
+            last_summary["suggestions"] = current_summary["suggestions"]
+
+            socketio.emit("audit_status", {"state": "done", "msg": "PARSING REPORT FILE..."})
+            time.sleep(1)
+            parse_and_emit(wait=False)
+            socketio.emit("audit_status", {"state": "finished", "msg": "ALL DATA LOADED"})
+
+        except Exception as ex:
+            socketio.emit("audit_status", {"state": "error", "msg": str(ex)})
         finally:
-            # Promote current to last on completion
-            last_audit_summary["warnings"]     = current_audit_summary["warnings"]
-            last_audit_summary["suggestions"]  = current_audit_summary["suggestions"]
-            current_audit_summary["warnings"]  = 0
-            current_audit_summary["suggestions"] = 0
             audit_lock.release()
 
     threading.Thread(target=run, daemon=True).start()
 
-def start_background():
-    t = threading.Thread(target=parse_and_emit, daemon=True)
-    t.start()
 
 if __name__ == "__main__":
-    start_background()
+    threading.Thread(target=parse_and_emit, args=(True,), daemon=True).start()
     socketio.run(app, host="0.0.0.0", port=5000, debug=False)
