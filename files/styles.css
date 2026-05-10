@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&family=VT323&display=swap');
 
 :root {
   --fg: #e8e8e8;
@@ -22,7 +22,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   overflow: hidden;
 }
 
@@ -105,7 +105,7 @@ body::after {
 
 #header .badge {
   font-size: 12px;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Fira Code', monospace;
   border: 1px solid var(--fg);
   padding: 2px 8px;
   letter-spacing: 1px;
