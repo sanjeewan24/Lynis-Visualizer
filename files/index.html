@@ -4,352 +4,383 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LYNIS // CYBER DASHBOARD</title>
-  <style>
-    /* Tailwind micro-reset — replaces CDN dependency */
-    *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; }
-  </style>
-  <!-- three.js loaded before visualizer.js at body end -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=5" />
 </head>
 <body>
 
 <!-- Detail Modal -->
-<div id="modal-overlay" style="
-  display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
-  z-index:2000;align-items:center;justify-content:center;">
-  <div style="
-    background:#0a0a0a;border:2px solid #e8e8e8;max-width:560px;width:90%;
-    padding:20px;font-family:'Fira Code',monospace;position:relative;">
-    <div style="font-family:'VT323',monospace;font-size:22px;letter-spacing:3px;
-                margin-bottom:12px;border-bottom:1px solid #333;padding-bottom:8px;">
-      ▒ EVENT DETAIL
-    </div>
-    <div id="modal-type"  style="font-size:10px;letter-spacing:2px;color:#888;margin-bottom:6px;"></div>
-    <div id="modal-text"  style="font-size:12px;line-height:1.7;word-break:break-all;margin-bottom:16px;"></div>
-    <div id="modal-fix"   style="font-size:11px;color:#888;line-height:1.6;border-left:2px solid #444;padding-left:10px;"></div>
-    <button onclick="closeModal()" style="
-      margin-top:16px;font-family:'Fira Code',monospace;font-size:11px;
-      letter-spacing:2px;padding:6px 16px;background:#e8e8e8;color:#0a0a0a;
-      border:none;cursor:pointer;text-transform:uppercase;">✕ CLOSE</button>
+<div id="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">▒ EVENT DETAIL</div>
+    <div id="modal-type" class="modal-type"></div>
+    <div id="modal-text" class="modal-text"></div>
+    <div id="modal-fix"  class="modal-fix"></div>
+    <button onclick="closeModal()" class="modal-close">✕ CLOSE</button>
   </div>
 </div>
 
-<div id="vtx-tooltip" style="
-  display:none;position:fixed;pointer-events:none;z-index:1000;
-  background:#0a0a0a;border:1px solid #ffbf00;color:#ffbf00;
-  font-family:'Share Tech Mono',monospace;font-size:10px;
-  padding:4px 8px;letter-spacing:1px;max-width:260px;line-height:1.4;
-"></div>
+<!-- Vertex tooltip -->
+<div id="vtx-tooltip"></div>
+
 <div id="app">
-  
-  <!-- ── Header ── -->
-  <header id="header" class="pixel-box">
-    <div>
-      <span style="font-size:26px;">▓▓</span>
-      &nbsp;LYNIS :: CYBER-HARDENED DASHBOARD
-      &nbsp;<span class="blink" style="font-size:14px;">█</span>
+
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <span class="header-logo">▓▓</span>
+      LYNIS :: CYBER-HARDENED DASHBOARD
+      <span class="blink">█</span>
     </div>
-    <div style="display:flex;gap:12px;align-items:center;">
-      <span id="badge-warn"  class="badge warn">WARN: 0</span>
+    <div class="header-badges">
+      <span id="badge-warn"  class="badge badge-warn">WARN: 0</span>
       <span id="badge-sugg"  class="badge">SUGG: 0</span>
+      <span id="badge-unsafe" class="badge badge-orange">UNSAFE: 0</span>
       <span id="badge-tests" class="badge">TESTS: —</span>
     </div>
   </header>
 
-  <!-- ── Sphere Canvas ── -->
+  <!-- Canvas -->
   <div id="canvas-wrap">
     <div id="crater-count">CRATERS: 0</div>
+
+    <!-- Sphere toggles -->
+    <div id="sphere-toggles">
+      <div class="toggle-label">SPHERE LAYERS</div>
+      <label class="toggle-row"><input type="checkbox" id="tog-warning"      checked onchange="saveToggles()"> <span class="dot dot-red"></span> WARNINGS</label>
+      <label class="toggle-row"><input type="checkbox" id="tog-suggestion"   checked onchange="saveToggles()"> <span class="dot dot-amber"></span> SUGGESTIONS</label>
+      <label class="toggle-row"><input type="checkbox" id="tog-unsafe"       checked onchange="saveToggles()"> <span class="dot dot-orange"></span> UNSAFE SVC</label>
+      <label class="toggle-row"><input type="checkbox" id="tog-exposed"      checked onchange="saveToggles()"> <span class="dot dot-yellow"></span> EXPOSED SVC</label>
+      <label class="toggle-row"><input type="checkbox" id="tog-disabled"     checked onchange="saveToggles()"> <span class="dot dot-gray"></span> DISABLED</label>
+      <label class="toggle-row"><input type="checkbox" id="tog-ok"           checked onchange="saveToggles()"> <span class="dot dot-white"></span> OK / DONE</label>
+    </div>
+
     <div id="harden-idx">
-      <span>HARDENING INDEX</span>
+      <span class="hi-label">HARDENING INDEX</span>
       <span id="hi-val">—</span>
+    </div>
+
+    <!-- System info bar -->
+    <div id="sysinfo-bar">
+      <span id="si-host">HOST: —</span>
+      <span id="si-os">OS: —</span>
+      <span id="si-kernel">KERNEL: —</span>
     </div>
   </div>
 
-  <!-- ── Side Panel ── -->
+  <!-- Side Panel -->
   <aside id="panel">
-    <div id="panel-header" class="pixel-box">
-      ▒ LIVE FEED
+    <div id="panel-header">▒ LIVE FEED</div>
+    <div class="px-divider"></div>
+
+    <!-- Feed filter tabs -->
+    <div id="filter-tabs">
+      <button class="ftab active" data-filter="all"      onclick="setFilter('all',this)">ALL</button>
+      <button class="ftab" data-filter="warning"         onclick="setFilter('warning',this)">WARN</button>
+      <button class="ftab" data-filter="suggestion"      onclick="setFilter('suggestion',this)">SUGG</button>
+      <button class="ftab" data-filter="unsafe_service"  onclick="setFilter('unsafe_service',this)">UNSAFE</button>
+      <button class="ftab" data-filter="status_ok"       onclick="setFilter('status_ok',this)">OK</button>
     </div>
-    <!-- Feed utilities -->
-    <div style="display:flex;gap:6px;padding:8px 12px;border-bottom:2px solid #e8e8e8;flex-shrink:0;">
-      <button onclick="clearFeed()" style="
-        flex:1;font-family:'Fira Code',monospace;font-size:9px;letter-spacing:1px;
-        padding:5px 2px;background:transparent;color:#888;border:1px solid #444;
-        cursor:pointer;text-transform:uppercase;">✕ CLEAR</button>
-      <button onclick="exportCSV()" style="
-        flex:1;font-family:'Fira Code',monospace;font-size:9px;letter-spacing:1px;
-        padding:5px 2px;background:transparent;color:#e8e8e8;border:1px solid #e8e8e8;
-        cursor:pointer;text-transform:uppercase;">↓ EXPORT</button>
+
+    <!-- Utilities -->
+    <div id="feed-utils">
+      <button onclick="clearFeed()" class="util-btn util-clear">✕ CLEAR</button>
+      <button onclick="exportCSV()" class="util-btn util-export">↓ EXPORT</button>
+    </div>
+
+    <!-- Control center -->
+    <div id="control-center">
+      <div class="cc-label">▒ CONTROL CENTER</div>
+      <button id="btn-audit" onclick="runAudit()" class="audit-btn">▶ RUN SYSTEM AUDIT</button>
+      <div id="audit-bar-wrap">
+        <div id="audit-bar"></div>
+      </div>
+      <div id="audit-label">IDLE</div>
+      <div id="audit-section"></div>
     </div>
 
     <div class="px-divider"></div>
-
-    <!-- CONTROL CENTER -->
-        <div style="padding:10px 12px;border-bottom:2px solid #e8e8e8;flex-shrink:0;">
-          <div style="font-family:'VT323',monospace;font-size:16px;letter-spacing:3px;margin-bottom:8px;color:#888;">▒ CONTROL CENTER</div>
-          <button id="btn-audit"
-            onclick="runAudit()"
-            style="width:100%;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;
-                  padding:8px 4px;background:#e8e8e8;color:#0a0a0a;border:none;cursor:pointer;
-                  text-transform:uppercase;outline:2px solid #e8e8e8;outline-offset:2px;">
-            ▶ RUN SYSTEM AUDIT
-          </button>
-          <!-- Progress bar -->
-          <div style="margin-top:8px;height:6px;background:#1a1a1a;border:1px solid #333;overflow:hidden;">
-            <div id="audit-bar" style="height:100%;width:0%;background:#e8e8e8;transition:width 0.3s;"></div>
-          </div>
-          <div id="audit-label" style="font-size:10px;letter-spacing:1px;color:#888;margin-top:4px;">IDLE</div>
-        </div>
-
     <div id="feed"></div>
-
     <div class="px-divider"></div>
+
+    <!-- Stats -->
     <div id="stats-bar">
-      <div class="row">
-        <span>WARNINGS</span>
-        <span class="val">
-          <span id="stat-warn">0</span>
-          <span id="delta-warn" style="font-size:10px;color:#888;margin-left:4px;"></span>
-        </span>
-      </div>
-      <div class="row">
-        <span>SUGGESTIONS</span>
-        <span class="val">
-          <span id="stat-sugg">0</span>
-          <span id="delta-sugg" style="font-size:10px;color:#888;margin-left:4px;"></span>
-        </span>
-      </div>
-      <div class="row">
-        <span>TESTS RUN</span>
-        <span class="val" id="stat-tests">0</span>
-      </div>
-      <div class="row">
-        <span>STATUS</span>
-        <span class="val" id="stat-status" style="font-size:12px;letter-spacing:1px;">WAITING</span>
-      </div>
+      <div class="stat-row"><span>WARNINGS</span>    <span class="stat-val"><span id="stat-warn">0</span><span id="delta-warn" class="delta"></span></span></div>
+      <div class="stat-row"><span>SUGGESTIONS</span> <span class="stat-val"><span id="stat-sugg">0</span><span id="delta-sugg" class="delta"></span></span></div>
+      <div class="stat-row"><span>UNSAFE SVC</span>  <span class="stat-val"><span id="stat-unsafe">0</span></span></div>
+      <div class="stat-row"><span>EXPOSED SVC</span> <span class="stat-val"><span id="stat-exposed">0</span></span></div>
+      <div class="stat-row"><span>DISABLED</span>    <span class="stat-val"><span id="stat-disabled">0</span></span></div>
+      <div class="stat-row"><span>TESTS RUN</span>   <span class="stat-val"><span id="stat-tests">0</span></span></div>
+      <div class="stat-row"><span>STATUS</span>       <span class="stat-val" id="stat-status">WAITING</span></div>
     </div>
   </aside>
-
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
 <script>
 (function () {
   "use strict";
 
-  const feed      = document.getElementById("feed");
-  const badgeWarn = document.getElementById("badge-warn");
-  const badgeSugg = document.getElementById("badge-sugg");
-  const badgeTests= document.getElementById("badge-tests");
-  const statWarn  = document.getElementById("stat-warn");
-  const statSugg  = document.getElementById("stat-sugg");
-  const statTests = document.getElementById("stat-tests");
-  const statStatus= document.getElementById("stat-status");
-  const hiVal     = document.getElementById("hi-val");
+  // ── Counters ──
+  let warnCount=0, suggCount=0, unsafeCount=0, exposedCount=0, disabledCount=0, testsCount=0;
 
-  let warnCount = 0, suggCount = 0, testsCount = 0;
+  // ── Feed filter state ──
+  let activeFilter = "all";
+  const allItems   = []; // {el, type}
 
-  function addFeedItem(text, type) {
-    const el = document.createElement("div");
-    el.className = `feed-item ${type}`;
+  // ── DOM refs ──
+  const feed        = document.getElementById("feed");
+  const badgeWarn   = document.getElementById("badge-warn");
+  const badgeSugg   = document.getElementById("badge-sugg");
+  const badgeUnsafe = document.getElementById("badge-unsafe");
+  const badgeTests  = document.getElementById("badge-tests");
 
-    const prefix = type === "warning"    ? "[WARN] "
-                 : type === "suggestion" ? "[SUGG] "
-                 : "[SYS]  ";
-
-    el.textContent = prefix + text;
-
-    if (type === "warning" || type === "suggestion") {
-      el.style.cursor = "pointer";
-      el.title = "Click for detail";
-      el.addEventListener("click", () => openModal(type, text));
-    }
-
-    feed.appendChild(el);
-
-    // Keep last 200 items
-    while (feed.children.length > 200) {
-      feed.removeChild(feed.firstChild);
-    }
-    feed.scrollTop = feed.scrollHeight;
-  }
-
-  // ── Socket.IO ──
-  const socket = io();
-
-/* ── Delta indicator ── */
-  function setDelta(elId, delta) {
-    const el = document.getElementById(elId);
-    if (!el || delta === undefined || delta === null) return;
-    el.textContent = delta > 0 ? `(+${delta})` : delta < 0 ? `(${delta})` : "";
-    el.style.color = delta > 0 ? "#ff2a2a" : delta < 0 ? "#44ff88" : "#888";
-  }
-
-  /* ── Modal ── */
-  const LYNIS_FIXES = {
-    "FIRE": "Configure a host-based firewall (ufw/iptables).",
-    "SSH":  "Harden sshd_config: disable root login, set MaxAuthTries.",
-    "KRNL": "Apply pending kernel updates via apt upgrade.",
-    "AUTH": "Enforce PAM password complexity and account lockout.",
-    "PKG":  "Run apt update && apt upgrade to patch packages.",
+  // ── Lynis fix hints ──
+  const FIXES = {
+    "AUTH": "Harden PAM: enforce complexity, lockout policy, and expiry in /etc/login.defs",
+    "FIRE": "Configure ufw/iptables. Review unused rules with: iptables -L -n -v",
+    "SSH":  "Edit /etc/ssh/sshd_config: disable root login, set MaxAuthTries 3",
+    "KRNL": "Apply sysctl hardening. Check /etc/sysctl.conf vs Lynis recommendations",
+    "PKGS": "Run: sudo apt update && sudo apt upgrade && sudo apt autoremove",
+    "NETW": "Disable unused kernel network modules via /etc/modprobe.d/",
+    "LOGG": "Configure rsyslog remote logging. Check deleted-but-open files: lsof +L1",
+    "BANN": "Add legal warning text to /etc/issue and /etc/issue.net",
+    "ACCT": "Install: sudo apt install acct auditd sysstat",
+    "FINT": "Install: sudo apt install aide tripwire rkhunter",
+    "FILE": "Run: chmod 600 on world-writable sensitive files",
+    "HRDN": "Restrict compiler access: chmod o-rx /usr/bin/gcc /usr/bin/cc",
+    "USB":  "Add blacklist usb-storage to /etc/modprobe.d/blacklist.conf",
+    "PRNT": "chmod 640 /etc/cups/cupsd.conf",
+    "BOOT": "Set GRUB password: grub-mkpasswd-pbkdf2 then edit /etc/grub.d/40_custom",
   };
 
-  function openModal(type, text) {
-    const key = Object.keys(LYNIS_FIXES).find(k => text.toUpperCase().includes(k));
-    document.getElementById("modal-type").textContent = `[${type.toUpperCase()}]`;
-    document.getElementById("modal-text").textContent = text;
-    document.getElementById("modal-fix").textContent  = key
-      ? "▸ SUGGESTED FIX: " + LYNIS_FIXES[key]
-      : "▸ Review the Lynis documentation for this control.";
-    const overlay = document.getElementById("modal-overlay");
-    overlay.style.display = "flex";
+  function getFix(text) {
+    const t = (text || "").toUpperCase();
+    for (const [key, fix] of Object.entries(FIXES)) {
+      if (t.includes(key)) return fix;
+    }
+    return "Review the Lynis documentation: https://cisofy.com/lynis/controls/";
   }
+
+  // ── Modal ──
   window.closeModal = function () {
     document.getElementById("modal-overlay").style.display = "none";
   };
+  function openModal(type, text) {
+    document.getElementById("modal-type").textContent = `[${type.toUpperCase()}]`;
+    document.getElementById("modal-text").textContent = text;
+    document.getElementById("modal-fix").textContent  = "▸ " + getFix(text);
+    document.getElementById("modal-overlay").style.display = "flex";
+  }
 
-  /* ── Feed utilities ── */
-  window.clearFeed = function () {
-    document.getElementById("feed").innerHTML = "";
-    addFeedItem("FEED CLEARED", "status");
+  // ── Filter ──
+  window.setFilter = function (filter, btn) {
+    activeFilter = filter;
+    document.querySelectorAll(".ftab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    allItems.forEach(({el, type}) => {
+      el.style.display = (filter === "all" || type === filter) ? "block" : "none";
+    });
   };
 
-  window.exportCSV = function () {
-    window.location.href = "/api/export";
+  // ── Feed item ──
+  const TYPE_CSS = {
+    warning:        "fi-warning",
+    suggestion:     "fi-suggestion",
+    vulnerability:  "fi-vuln",
+    unsafe_service: "fi-unsafe",
+    exposed_service:"fi-exposed",
+    status_disabled:"fi-disabled",
+    status_missing: "fi-disabled",
+    status_medium:  "fi-medium",
+    status_ok:      "fi-ok",
+    status_check:   "fi-ok",
+    status_info:    "fi-info",
+    info:           "fi-info",
+    status:         "fi-status",
   };
 
+  const TYPE_PREFIX = {
+    warning:        "[WARN]   ",
+    suggestion:     "[SUGG]   ",
+    vulnerability:  "[VULN]   ",
+    unsafe_service: "[UNSAFE] ",
+    exposed_service:"[EXPOSE] ",
+    status_disabled:"[OFF]    ",
+    status_missing: "[MISS]   ",
+    status_medium:  "[MED]    ",
+    status_ok:      "[OK]     ",
+    status_check:   "[CHECK]  ",
+    status_info:    "[INFO]   ",
+    info:           "[INFO]   ",
+    status:         "[SYS]    ",
+  };
+
+  function addFeedItem(text, type) {
+    const el  = document.createElement("div");
+    const css = TYPE_CSS[type] || "fi-info";
+    el.className = `feed-item ${css}`;
+    el.textContent = (TYPE_PREFIX[type] || "[???]    ") + text;
+
+    if (["warning","suggestion","vulnerability","unsafe_service","exposed_service"].includes(type)) {
+      el.style.cursor = "pointer";
+      el.title = "Click for detail & fix";
+      el.addEventListener("click", () => openModal(type, text));
+    }
+
+    if (activeFilter !== "all" && type !== activeFilter) el.style.display = "none";
+    allItems.push({el, type});
+    if (allItems.length > 500) {
+      const old = allItems.shift();
+      if (old.el.parentNode) old.el.parentNode.removeChild(old.el);
+    }
+    feed.appendChild(el);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  // ── Delta ──
+  function setDelta(id, delta) {
+    const el = document.getElementById(id);
+    if (!el || delta == null) return;
+    el.textContent = delta > 0 ? ` (+${delta})` : delta < 0 ? ` (${delta})` : "";
+    el.style.color  = delta > 0 ? "#ff2a2a" : delta < 0 ? "#44ff88" : "#888";
+  }
+
+  // ── processEvent ──
   function processEvent(evt) {
-    if (evt.type === "warning") {
+    const t = evt.type;
+
+    if (t === "warning") {
       warnCount++;
       badgeWarn.textContent = `WARN: ${warnCount}`;
-      statWarn.textContent  = warnCount;
+      document.getElementById("stat-warn").textContent = warnCount;
       addFeedItem(evt.text, "warning");
-      if (typeof window.applyWarningCrater   === "function") window.applyWarningCrater();
-      if (typeof window.triggerSpinBurst     === "function") window.triggerSpinBurst();
-    } else if (evt.type === "suggestion") {
+      window.sphereMark && window.sphereMark("warning", evt.text);
+    } else if (t === "suggestion") {
       suggCount++;
       badgeSugg.textContent = `SUGG: ${suggCount}`;
-      statSugg.textContent  = suggCount;
+      document.getElementById("stat-sugg").textContent = suggCount;
       addFeedItem(evt.text, "suggestion");
-      if (typeof window.applySuggestionMark === "function") window.applySuggestionMark(evt.text);
-    } else if (evt.type === "vulnerability") {
-      addFeedItem(evt.text, "warning"); // red, same urgency
-      if (typeof window.applyVulnerabilitySpike === "function") window.applyVulnerabilitySpike(evt.text);
-    } else if (evt.type === "unsafe_service") {
-      addFeedItem(evt.text, "suggestion"); // amber
-      if (typeof window.applySuggestionMark === "function") window.applySuggestionMark(evt.text);
-    } else if (evt.type === "hardening_index") {
+      window.sphereMark && window.sphereMark("suggestion", evt.text);
+    } else if (t === "vulnerability") {
+      addFeedItem(evt.text, "vulnerability");
+      window.sphereMark && window.sphereMark("vulnerability", evt.text);
+    } else if (t === "unsafe_service") {
+      unsafeCount++;
+      badgeUnsafe.textContent = `UNSAFE: ${unsafeCount}`;
+      document.getElementById("stat-unsafe").textContent = unsafeCount;
+      addFeedItem(evt.text, "unsafe_service");
+      window.sphereMark && window.sphereMark("unsafe_service", evt.text);
+    } else if (t === "exposed_service") {
+      exposedCount++;
+      document.getElementById("stat-exposed").textContent = exposedCount;
+      addFeedItem(evt.text, "exposed_service");
+      window.sphereMark && window.sphereMark("exposed_service", evt.text);
+    } else if (t === "status_disabled" || t === "status_missing") {
+      disabledCount++;
+      document.getElementById("stat-disabled").textContent = disabledCount;
+      addFeedItem(evt.text, t);
+      window.sphereMark && window.sphereMark("disabled", evt.text);
+    } else if (t === "status_medium") {
+      addFeedItem(evt.text, "status_medium");
+    } else if (t === "status_ok" || t === "status_check") {
+      addFeedItem(evt.text, "status_ok");
+      window.sphereMark && window.sphereMark("ok", evt.text);
+    } else if (t === "info" || t === "info_event") {
+      addFeedItem(evt.text, "info");
+    } else if (t === "hardening_index") {
       document.getElementById("hi-val").textContent = evt.value;
-    } else if (evt.type === "tests_performed") {
+    } else if (t === "tests_performed") {
       testsCount = evt.value;
       document.getElementById("stat-tests").textContent  = testsCount;
-      document.getElementById("badge-tests").textContent = `TESTS: ${testsCount}`;
+      badgeTests.textContent = `TESTS: ${testsCount}`;
     }
   }
 
+  // ── Socket ──
+  const socket = io();
+
   socket.on("connect", () => {
-    statStatus.textContent = "LINKED";
+    document.getElementById("stat-status").textContent = "LINKED";
     addFeedItem("WebSocket link established.", "status");
-    socket.emit("request_history");
     socket.emit("sync");
   });
 
-  socket.on("sync_dump", (d) => {
-    if (!d.events || !d.events.length) return;
-    addFeedItem(`[SYNC] REPLAYING ${d.events.length} STORED EVENTS`, "status");
-    d.events.forEach(processEvent);
-  });
-  socket.on("history_dump", (d) => {
-    if (!d.events.length) return;
-    addFeedItem(`RESTORING ${d.events.length} EVENTS FROM SESSION...`, "status");
-    d.events.forEach((evt) => {
-      if (evt.type === "warning") {
-        warnCount++;
-        addFeedItem(evt.text, "warning");
-        if (typeof window.applyWarningCrater === "function") window.applyWarningCrater();
-      } else if (evt.type === "suggestion") {
-        suggCount++;
-        addFeedItem(evt.text, "suggestion");
-        if (typeof window.applySuggestionMark === "function") window.applySuggestionMark(evt.text);
-      } else if (evt.type === "hardening_index") {
-        document.getElementById("hi-val").textContent = evt.value;
-      } else if (evt.type === "tests_performed") {
-        testsCount = evt.value;
-        document.getElementById("stat-tests").textContent = testsCount;
-        document.getElementById("badge-tests").textContent = `TESTS: ${testsCount}`;
-      }
-    });
-    badgeWarn.textContent = `WARN: ${warnCount}`;
-    statWarn.textContent  = warnCount;
-    badgeSugg.textContent = `SUGG: ${suggCount}`;
-    statSugg.textContent  = suggCount;
-  });
-
   socket.on("disconnect", () => {
-    statStatus.textContent = "OFFLINE";
-    addFeedItem("Connection lost. Retrying…", "status");
+    document.getElementById("stat-status").textContent = "OFFLINE";
   });
 
-  socket.on("status", (d) => {
-    addFeedItem(d.msg, "status");
-    statStatus.textContent = "PARSING";
+  socket.on("status", (d) => { addFeedItem(d.msg, "status"); });
+  socket.on("error",  (d) => { addFeedItem("ERROR: " + d.msg, "status"); });
+
+  socket.on("system_info", (d) => {
+    if (d.key === "hostname")   document.getElementById("si-host").textContent   = "HOST: " + d.value;
+    if (d.key === "os")         document.getElementById("si-os").textContent     = "OS: "   + d.value;
+    if (d.key === "os_version") document.getElementById("si-os").textContent     += " " + d.value;
+    if (d.key === "kernel")     document.getElementById("si-kernel").textContent = "KERNEL: " + d.value;
   });
 
-  socket.on("error", (d) => {
-    addFeedItem("ERROR: " + d.msg, "status");
-    statStatus.textContent = "ERROR";
+  socket.on("audit_section", (d) => {
+    document.getElementById("audit-section").textContent = "▸ " + d.section;
   });
+
+  socket.on("audit_progress", (d) => { addFeedItem(d.line, "status"); });
 
   socket.on("session_reset", () => {
-    // Clear all counters and feed for fresh run
-    warnCount = 0; suggCount = 0; testsCount = 0;
-    badgeWarn.textContent  = "WARN: 0";
-    badgeSugg.textContent  = "SUGG: 0";
-    badgeTests.textContent = "TESTS: —";
-    statWarn.textContent   = "0";
-    statSugg.textContent   = "0";
-    statTests.textContent  = "0";
-    document.getElementById("hi-val").textContent    = "—";
+    warnCount=0; suggCount=0; unsafeCount=0; exposedCount=0; disabledCount=0; testsCount=0;
+    allItems.length = 0;
+    badgeWarn.textContent   = "WARN: 0";
+    badgeSugg.textContent   = "SUGG: 0";
+    badgeUnsafe.textContent = "UNSAFE: 0";
+    badgeTests.textContent  = "TESTS: —";
+    ["stat-warn","stat-sugg","stat-unsafe","stat-exposed","stat-disabled","stat-tests"]
+      .forEach(id => document.getElementById(id).textContent = "0");
+    document.getElementById("hi-val").textContent = "—";
     document.getElementById("delta-warn").textContent = "";
     document.getElementById("delta-sugg").textContent = "";
-    document.getElementById("feed").innerHTML = "";
+    feed.innerHTML = "";
     addFeedItem("SESSION RESET — NEW AUDIT STARTING", "status");
+    window.sphereReset && window.sphereReset();
   });
 
-  socket.on("warning",         (d) => { processEvent({type:"warning",        ...d}); setDelta("delta-warn", d.delta); });
-  socket.on("suggestion",      (d) => { processEvent({type:"suggestion",     ...d}); setDelta("delta-sugg", d.delta); });
-  socket.on("hardening_index", (d) => processEvent({type:"hardening_index",  ...d}));
-  socket.on("tests_performed", (d) => processEvent({type:"tests_performed",  ...d}));
-  socket.on("vulnerability",   (d) => processEvent({type:"vulnerability",    ...d}));
-  socket.on("unsafe_service",  (d) => processEvent({type:"unsafe_service",   ...d}));
+  socket.on("warning",        (d) => { processEvent({type:"warning",        ...d}); setDelta("delta-warn", d.delta); });
+  socket.on("suggestion",     (d) => { processEvent({type:"suggestion",     ...d}); setDelta("delta-sugg", d.delta); });
+  socket.on("vulnerability",  (d) =>   processEvent({type:"vulnerability",  ...d}));
+  socket.on("unsafe_service", (d) =>   processEvent({type:"unsafe_service", ...d}));
+  socket.on("exposed_service",(d) =>   processEvent({type:"exposed_service",...d}));
+  socket.on("status_disabled",(d) =>   processEvent({type:"status_disabled",...d}));
+  socket.on("status_medium",  (d) =>   processEvent({type:"status_medium",  ...d}));
+  socket.on("status_check",   (d) =>   processEvent({type: d.category || "status_ok", text: d.text}));
+  socket.on("info_event",     (d) =>   processEvent({type:"info",           ...d}));
+  socket.on("hardening_index",(d) =>   processEvent({type:"hardening_index",...d}));
+  socket.on("tests_performed",(d) =>   processEvent({type:"tests_performed",...d}));
+
+  socket.on("sync_dump", (d) => {
+    if (!d.events || !d.events.length) return;
+    addFeedItem(`[SYNC] RESTORING ${d.events.length} EVENTS`, "status");
+    function replayEvents() {
+      if (typeof window.sphereMark !== "function") { setTimeout(replayEvents, 80); return; }
+      d.events.forEach(processEvent);
+    }
+    replayEvents();
+  });
 
   // ── Audit control ──
-  let auditProgress = 0;
-  let auditTimer    = null;
+  let auditTimer = null;
+  let auditPct   = 0;
 
   window.runAudit = function () {
     const btn = document.getElementById("btn-audit");
     btn.disabled = true;
-    btn.style.opacity = "0.5";
-    btn.textContent   = "⏳ RUNNING...";
-    auditProgress = 0;
+    btn.textContent = "⏳ RUNNING...";
+    auditPct = 0;
     document.getElementById("audit-bar").style.width = "0%";
     document.getElementById("audit-label").textContent = "STARTING...";
     socket.emit("start_audit");
-
-    // Fake incremental fill so bar moves while audit runs
     auditTimer = setInterval(() => {
-      if (auditProgress < 85) {
-        auditProgress += Math.random() * 2;
-        document.getElementById("audit-bar").style.width = auditProgress + "%";
-      }
-    }, 800);
+      if (auditPct < 88) { auditPct += Math.random() * 1.5; }
+      document.getElementById("audit-bar").style.width = Math.min(auditPct, 88) + "%";
+    }, 900);
   };
-
-  socket.on("audit_progress", (d) => {
-    addFeedItem(d.line, "status");
-  });
 
   socket.on("audit_status", (d) => {
     clearInterval(auditTimer);
@@ -357,38 +388,64 @@
     const label = document.getElementById("audit-label");
     const btn   = document.getElementById("btn-audit");
 
-    if (d.state === "done") {
-      bar.style.width        = "100%";
-      bar.style.background   = "#e8e8e8";
-      label.textContent      = "COMPLETE";
-      label.style.color      = "#e8e8e8";
+    if (d.state === "finished" || d.state === "done") {
+      bar.style.width = "100%";
+      label.textContent = "COMPLETE";
+      label.style.color = "#e8e8e8";
     } else if (d.state === "error") {
-      bar.style.width        = "100%";
-      bar.style.background   = "#ff2a2a";
-      label.textContent      = "ERROR";
-      label.style.color      = "#ff2a2a";
+      bar.style.width = "100%";
+      bar.style.background = "#ff2a2a";
+      label.textContent = "ERROR";
+      label.style.color = "#ff2a2a";
     } else if (d.state === "busy") {
-      label.textContent      = "BUSY";
+      label.textContent = "BUSY";
+    } else if (d.state === "running") {
+      label.textContent = d.msg;
+      return;
     }
-
-    addFeedItem(d.msg, d.state === "error" ? "warning" : "status");
-
+    addFeedItem(d.msg, "status");
     if (d.state !== "running") {
-      btn.disabled      = false;
-      btn.style.opacity = "1";
-      btn.textContent   = "▶ RUN SYSTEM AUDIT";
+      btn.disabled = false;
+      btn.textContent = "▶ RUN SYSTEM AUDIT";
     }
   });
+
+  // ── Feed utilities ──
+  window.clearFeed = function () {
+    feed.innerHTML = "";
+    allItems.length = 0;
+    addFeedItem("FEED CLEARED", "status");
+  };
+  window.exportCSV = function () { window.location.href = "/api/export"; };
+
+  // ── Sphere toggle persistence ──
+  window.saveToggles = function () {
+    const state = {};
+    document.querySelectorAll("#sphere-toggles input[type=checkbox]").forEach(cb => {
+      state[cb.id] = cb.checked;
+    });
+    try { localStorage.setItem("lynis_toggles", JSON.stringify(state)); } catch(e){}
+    window.applyToggles && window.applyToggles();
+  };
+
+  function loadToggles() {
+    try {
+      const saved = JSON.parse(localStorage.getItem("lynis_toggles") || "{}");
+      Object.entries(saved).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = val;
+      });
+    } catch(e){}
+  }
+  loadToggles();
+
 })();
 </script>
 
-<!-- Three.js visualizer loaded after DOM is ready -->
+<!-- Three.js + OrbitControls + Visualizer -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-// Inject OrbitControls for r128 (no module support)
-</script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<script src="/visualizer.js"></script>
+<script src="/visualizer.js?v=5"></script>
 
 </body>
 </html>

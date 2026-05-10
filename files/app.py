@@ -5,7 +5,7 @@ import threading
 import subprocess
 import csv as csv_mod
 import io
-from flask import Flask, Response
+from flask import Flask, Response, request
 from flask_socketio import SocketIO
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -277,15 +277,21 @@ def export_csv():
 # ── Socket handlers ────────────────────────────────────────
 @socketio.on("connect")
 def on_connect():
-    socketio.emit("status", {"msg": "LINK ESTABLISHED"})
+    sid = request.sid
+    socketio.emit("status", {"msg": "LINK ESTABLISHED"}, to=sid)
+    # Push existing audit_log immediately to this client
+    if audit_log:
+        socketio.emit("sync_dump", {"events": audit_log}, to=sid)
 
 @socketio.on("sync")
 def handle_sync():
-    socketio.emit("sync_dump", {"events": audit_log})
+    sid = request.sid
+    socketio.emit("sync_dump", {"events": audit_log}, to=sid)
 
 @socketio.on("request_history")
 def handle_history():
-    socketio.emit("history_dump", {"events": audit_log})
+    sid = request.sid
+    socketio.emit("history_dump", {"events": audit_log}, to=sid)
 
 @socketio.on("start_audit")
 def handle_start_audit():
@@ -331,6 +337,26 @@ def handle_start_audit():
     threading.Thread(target=run, daemon=True).start()
 
 
+def _startup_parse():
+    """Silently parse existing .dat into audit_log on startup."""
+    for _ in range(60):
+        if os.path.exists(LYNIS_REPORT):
+            break
+        time.sleep(1)
+    if not os.path.exists(LYNIS_REPORT):
+        return
+    try:
+        cmd = (["cat", LYNIS_REPORT] if os.access(LYNIS_REPORT, os.R_OK)
+               else ["sudo", "cat", LYNIS_REPORT])
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, bufsize=1)
+        for line in iter(proc.stdout.readline, ""):
+            parse_dat_line(line.rstrip())
+        proc.wait()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    threading.Thread(target=parse_and_emit, args=(True,), daemon=True).start()
+    threading.Thread(target=_startup_parse, daemon=True).start()
     socketio.run(app, host="0.0.0.0", port=5000, debug=False)
