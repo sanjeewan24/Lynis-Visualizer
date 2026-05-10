@@ -1,0 +1,86 @@
+═══════════════════════════════════════════════════════════
+  LYNIS :: CYBER-HARDENED DASHBOARD — SETUP GUIDE
+  Target OS : Linux Mint (Debian/Ubuntu-based)
+═══════════════════════════════════════════════════════════
+
+─── 1. INSTALL SYSTEM DEPENDENCIES ────────────────────────
+
+  sudo apt update
+  sudo apt install -y lynis python3-pip python3-venv
+
+─── 2. PROJECT SETUP ───────────────────────────────────────
+
+  cd /path/to/lynis-dashboard
+
+  python3 -m venv .venv
+  source .venv/bin/activate
+
+  pip install flask flask-socketio eventlet
+
+─── 3. SUDOERS — ALLOW PASSWORDLESS LOG READ (optional) ───
+  If /var/log/lynis-report.dat is root-owned, either:
+
+  a) Run the app as root (not recommended):
+       sudo python3 app.py
+
+  b) Grant your user read access (recommended):
+       sudo chmod o+r /var/log/lynis-report.dat
+       
+
+  c) Add a targeted sudoers rule (most secure):
+       sudo visudo -f /etc/sudoers.d/lynis-tail
+       # Add the line below (replace USERNAME):
+       USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tail -F -n +1 /var/log/lynis-report.dat
+
+─── 4. RUN A LYNIS AUDIT ───────────────────────────────────
+
+  # Full system audit (writes to /var/log/lynis-report.dat):
+  sudo lynis audit system
+
+  # To stream in real-time, run this in a second terminal
+  # BEFORE launching the dashboard, then re-run lynis:
+  sudo lynis audit system --no-colors 2>/dev/null &
+
+─── 5. START THE DASHBOARD ─────────────────────────────────
+
+  source .venv/bin/activate   # if not already active
+  python3 app.py
+
+  Open browser: http://localhost:5000
+
+─── 6. FILE STRUCTURE ──────────────────────────────────────
+
+  lynis-dashboard/
+  ├── app.py          ← Flask-SocketIO server + Lynis parser
+  ├── index.html      ← Frontend shell (Tailwind + Socket.IO)
+  ├── visualizer.js   ← Three.js sphere with crater deformation
+  ├── styles.css      ← Pixel-brutalism / CRT aesthetic
+  └── setup.txt       ← This file
+
+─── 7. HOW IT WORKS ────────────────────────────────────────
+
+  • app.py tails /var/log/lynis-report.dat using `tail -F`
+    (falls back to `sudo tail -F` if not directly readable).
+  • Regex parsers extract warning[], suggestion[],
+    hardening_index=, and tests_performed= fields.
+  • Events are pushed over WebSocket to the browser.
+  • Each WARNING event:
+      → adds a log entry to the live feed panel
+      → calls applyWarningCrater() which displaces a cluster
+        of sphere vertices inward, forming a visible crater
+      → triggers a brief rotation speed burst
+  • The hardening index and test count update live in the
+    bottom-left overlay and stats bar.
+
+─── 8. TROUBLESHOOTING ─────────────────────────────────────
+
+  "Report not found"    → Run `sudo lynis audit system` first.
+  Sphere not loading    → Check browser console; Three.js r128
+                          requires WebGL.
+  No events arriving    → Verify the report path is readable
+                          and Lynis has completed at least one
+                          section of the audit.
+  Port 5000 in use      → Change port in app.py:
+                          socketio.run(..., port=5001)
+
+═══════════════════════════════════════════════════════════
